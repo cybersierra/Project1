@@ -12,6 +12,11 @@
 static void printError(void) {
     fputs("An error has occurred\n", stderr);
     fflush(stderr);
+
+/* -------- utilities -------- */
+static void err(void) {
+    write(STDERR_FILENO, ERRMSG, sizeof(ERRMSG) - 1);
+    
 }
 
 // Main function
