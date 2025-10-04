@@ -1,5 +1,3 @@
-// Build: gcc -Wall -Wextra -O2 wish.c -o wish
-
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,3 +14,24 @@ static void printError(void) {
     fflush(stderr);
 }
 
+// Main function
+int main(int arc, char *argv[]) {
+    FILE *in = NULL;
+
+    // Interactive
+    if (argc == 1) {
+        in = stdin;
+
+    // Batch
+    } else if (argc == 2) {
+        in = fopen(argv[1], "r");
+        if (in == NULL) {
+            printError();
+            exit(1);
+        }
+    } else {
+        printError();
+        exit(1);
+    }
+
+}
