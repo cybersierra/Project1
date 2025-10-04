@@ -1,0 +1,12 @@
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <errno.h>
+
+/* -------- utilities -------- */
+static void err(void) {
+    write(STDERR_FILENO, ERRMSG, sizeof(ERRMSG) - 1);
