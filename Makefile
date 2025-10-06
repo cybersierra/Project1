@@ -1,6 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -O2 -std=gnu11
-
+CFLAGS += -Wall -Wextra -O2 -D_GNU_SOURCE
 all: wish
 
 wish: wish.c
