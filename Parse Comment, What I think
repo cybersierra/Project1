@@ -1,0 +1,6 @@
+
+/* parse one command possibly with redirection.
+   input like:  cmd arg1 arg2 > out.txt
+   Returns argv (NULL-terminated) and sets *redir_path (or NULL).
+   Errors on multiple '>' or no file after '>' return NULL and print error. */
+
