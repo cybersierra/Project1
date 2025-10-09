@@ -1,4 +1,3 @@
-#define _GNU_SOURCE   // unlocks GNU extensions for getline() and strsep()
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
