@@ -220,77 +220,110 @@ static int handle_builtin(char **argv) {
     return 0; // not a built-in command
 }
 
-/* ===========================================================
-   ==========      EXECUTE EXTERNAL COMMANDS          =========
-   =========================================================== */
+// ========== external command handler ==========
 
-/*
- * run_external():
- * Launches an external program (like /bin/ls).
- * Handles redirection (if redir_path != NULL).
- * Uses fork() + execv() + wait().
- * Parent continues after child creation.
- */
+// run_external():
+// Launches an external program (like /bin/ls).
+// Handles redirection (if redir_path != NULL).
+// Uses fork() + execv() + wait().
+// Parent continues after child creation.
+
 static void run_external(char **argv, const char *redir_path) {
-    if (!g_path || !g_path[0]) { err(); return; } // empty path means nothing executable
+    // if the user enters path() with no arguments, print error
+    if (!g_path || !g_path[0]) { 
+        err(); return; 
+    }
+
+    // try to find the absolute path from what the user entered, if it doesn't work then print error
     char *prog = resolve_exec(argv[0]);
-    if (!prog) { err(); return; }
+    if (!prog) { 
+        err(); return; 
+    }
 
+    // assuming that the program exists, fork a child process
     pid_t pid = fork();
-    if (pid < 0) { err(); free(prog); return; }
+    // if the fork fails, print error and free the memory allocated for the program
+    if (pid < 0) { 
+        err(); 
+        free(prog); 
+        return; 
+    }
 
+    // now we are in the child process
     if (pid == 0) {
-        // ===== child process =====
+        // if output redirection is needed
         if (redir_path) {
-            // open file for writing, truncate if exists
+            // create the file (if it doesn't exist), open it for writing, and truncate if it already exists
             int fd = open(redir_path, O_CREAT|O_WRONLY|O_TRUNC, 0666);
-            if (fd < 0) { err(); _exit(1); }
+            
+            // if the file cannot be opened, print error and exit
+            if (fd < 0) { 
+                err(); 
+                _exit(1); 
+            }
 
             // redirect stdout and stderr to file
             if (dup2(fd, STDOUT_FILENO) < 0 || dup2(fd, STDERR_FILENO) < 0) {
                 err();
                 _exit(1);
             }
+
+            // close the original file descriptor
             close(fd);
         }
 
-        execv(prog, argv); // replaces process image
-        // only runs if execv() fails
+        // replace the child process with the new program
+        execv(prog, argv);
+
+        // if the execv fails, print error and exit child
         err();
         _exit(1);
     } else {
-        // ===== parent process =====
+        // parent process: just free the program path
         free(prog);
-        // we don't wait here; caller may do it later for parallel commands
     }
 }
 
-/* ===========================================================
-   ==========                MAIN LOOP                =========
-   =========================================================== */
 
+// ========== main loop ==========
 int main(int argc, char *argv[]) {
+    // 'in' is where we are reading commands from, either stdin or a file
     FILE *in = NULL;
-    int interactive = 1; // 1 = prompt mode, 0 = batch mode
+    // interactive is 1 if we should show a prompt, 0 if running in batch mode
+    int interactive = 1;
 
-    // ======= Determine input source =======
+    // determine input source
+
+    // if there are no arguments, read from stdin (interactive mode)
     if (argc == 1) {
         in = stdin;
         interactive = 1;
-    } else if (argc == 2) {
+    } 
+    // if there is one argument, read from the specified file (batch mode)
+    else if (argc == 2) {
         in = fopen(argv[1], "r");
-        if (!in) { err(); exit(1); }
+        
+        // if the file cannot be opened, print error and exit
+        if (!in) { 
+            err(); 
+            exit(1); 
+        }
         interactive = 0;
-    } else {
+    } 
+    // if there is more than one argument, error and exit
+    else {
         err();
         exit(1);
     }
 
-    path_init(); // set default /bin path
+    // initialize PATH list to ["/bin", NULL]
+    path_init();
+
+    // buffer for getline()
     char *line = NULL;
     size_t cap = 0;
 
-    // ======= MAIN SHELL LOOP =======
+    // main shell loop
     while (1) {
         // show prompt only in interactive mode
         if (interactive) {
@@ -298,28 +331,48 @@ int main(int argc, char *argv[]) {
             fflush(stdout);
         }
 
+        // read one line of input at a time until EOF and then exit
         ssize_t n = getline(&line, &cap, in);
-        if (n == -1) break; // EOF -> exit gracefully
+        if (n == -1) break;
 
         // strip trailing newlines
         while (n > 0 && (line[n-1] == '\n' || line[n-1] == '\r')) line[--n] = '\0';
 
-        // split by '&' → multiple parallel commands per line
+        // split by '&' for parallel commands
         char **segments = split_tokens(line, "&");
-        if (!segments) { err(); continue; }
+        
+        // if split_tokens fails, print error and continue to next line
+        if (!segments) {
+            err();
+            continue;
+        }
 
         // collect child PIDs to wait for them all later
         size_t started = 0;
-        pid_t kids[256]; // arbitrary limit (enough for tests)
 
-        // process each command segment
+        // arbitrary limit (enough for tests)
+        pid_t kids[256]; 
+
+        // process each command segment separately
         for (size_t i=0; segments[i]; i++) {
             char *redir = NULL;
+            // parse_cmd_with_redir makes sure that we don't use more than one >, only one filename after >, and makes cmd = argv[]
             char **cmd = parse_cmd_with_redir(segments[i], &redir);
-            if (!cmd) { free(redir); continue; } // syntax error already handled
-            if (!cmd[0]) { free_argv(cmd); free(redir); continue; }
+            
+            // if parsing fails, print error and skip this segment
+            if (!cmd) { 
+                free(redir); 
+                continue; 
+            }
 
-            // check for built-ins (execute immediately)
+            // skip empty commands (like "ls && pwd")
+            if (!cmd[0]) { 
+                free_argv(cmd); 
+                free(redir); 
+                continue; 
+            }
+
+            // check for built-ins like exit, cd, or PATH (execute immediately)
             if (handle_builtin(cmd)) {
                 free_argv(cmd);
                 free(redir);
@@ -328,6 +381,8 @@ int main(int argc, char *argv[]) {
 
             // non-built-in: run external command
             char *prog = resolve_exec(cmd[0]);
+
+            // if the exe doesn't exist in any of the paths, print error and skip this segment
             if (!prog) {
                 err();
                 free_argv(cmd);
@@ -335,37 +390,65 @@ int main(int argc, char *argv[]) {
                 continue;
             }
 
+            // fork a child process for this command
             pid_t pid = fork();
+
+            // if we fail to fork, print error and skip this segment
             if (pid < 0) {
                 err();
-            } else if (pid == 0) {
-                // in child: handle redirection and execv
+            }
+
+            // if we are in the child process, do redirection and execv
+            else if (pid == 0) {
+                // this whole thing is almost exactly like what we did in run_external()
                 if (redir) {
+                    // create the file (if it doesn't exist), open it for writing, and truncate if it already exists
                     int fd = open(redir, O_CREAT|O_WRONLY|O_TRUNC, 0666);
-                    if (fd < 0) { err(); _exit(1); }
-                    if (dup2(fd, STDOUT_FILENO) < 0 || dup2(fd, STDERR_FILENO) < 0) { err(); _exit(1); }
+
+                    // if the file cannot be opened, print error and exit
+                    if (fd < 0) { 
+                        err(); 
+                        _exit(1); 
+                    }
+
+                    // redirect stdout and stderr to file
+                    if (dup2(fd, STDOUT_FILENO) < 0 || dup2(fd, STDERR_FILENO) < 0) { 
+                        err(); 
+                        _exit(1); 
+                    }
+
+                    // close the original file descriptor
                     close(fd);
                 }
+
+                // replace the child process with the new program
                 execv(prog, cmd);
+
+                // if execv fails, print error and exit child
                 err();
                 _exit(1);
             } else {
-                // parent tracks this child PID
-                if (started < sizeof(kids)/sizeof(kids[0])) kids[started++] = pid;
+                // save child PID in array to wait for it later
+                if (started < sizeof(kids)/sizeof(kids[0])) {
+                    kids[started++] = pid;
+                }
             }
 
+            // free memory allocated for this command segment
             free(prog);
             free_argv(cmd);
+            // free redirection path if any
             free(redir);
         }
 
-        // ======= Wait for all child processes =======
+        // wait for all child processes to finish
         for (size_t i=0; i<started; i++) {
+            // waitpid can be interrupted by signals, so we loop until it succeeds
             while (waitpid(kids[i], NULL, 0) < 0 && errno == EINTR) {
-                // retry if interrupted by a signal
             }
         }
 
+        // free memory allocated for command segments
         free_argv(segments);
     }
 
