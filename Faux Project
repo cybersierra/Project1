@@ -134,42 +134,31 @@ static char *resolve_exec(const char *cmd) {
  * - Exactly ONE filename allowed after '>'.
  * - Returns NULL if syntax is invalid.
  */
+
+// Trims leading and trailing whitespace from a string
+static char *trim_whitespace(char *string){
+    char* original_pointer = string;
+    char* backend_pointer;
+
+    // Skip leading whitespace
+    while (*original_pointer == ' ' || *original_pointer == '\t'){
+        original_pointer++;
+    }
+
+    // Remove trailing whitespace
+    backend_pointer = original_pointer + strlen(original_pointer);
+
+    while (backend_pointer > original_pointer && (backend_pointer[-1] == ' ' || backend_pointer[-1] == '\t' || backend_pointer[-1] == '\n')){
+        backend_pointer--;
+    }
+
+    *backend_pointer = '\0';
+    return original_pointer;
+}
+
 static char **parse_cmd_with_redir(char *segment, char **redir_path) {
-    *redir_path = NULL;
 
-    // count number of '>' symbols
-    int gt_count = 0;
-    for (char *c = segment; *c; c++) if (*c == '>') gt_count++;
-    if (gt_count > 1) { err(); return NULL; }
 
-    char *left = segment;
-    char *right = NULL;
-
-    if (gt_count == 1) {
-        // split at the first '>'
-        right = strchr(segment, '>');
-        *right = '\0';
-        right++;
-
-        // tokens after '>' should give exactly one filename
-        char **r = split_tokens(right, " \t");
-        if (!r || !r[0] || r[1]) {
-            err();
-            free_argv(r);
-            return NULL;
-        }
-        *redir_path = strdup(r[0]);
-        free_argv(r);
-    }
-
-    // split command part into argv[]
-    char **argv = split_tokens(left, " \t");
-    if (!argv || !argv[0]) {
-        free_argv(argv);
-        if (*redir_path) { free(*redir_path); *redir_path=NULL; }
-        return NULL;
-    }
-    return argv;
 }
 
 /* ===========================================================
