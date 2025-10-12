@@ -157,8 +157,64 @@ static char *trim_whitespace(char *string){
 }
 
 static char **parse_cmd_with_redir(char *segment, char **redir_path) {
+    *redir_path = NULL;
 
+    if (!segment) {
+        err();
+        return NULL;
+    }
 
+    // Counts > (Requires there only to be 0 or 1 '>')
+    int redir_count = 0;
+    for (char *count = segment; *count; c++) {
+        if (*count == '>'){
+            redir_count++;
+        }
+    }
+
+    // If more than one '>', then NULL
+    if (redir_count > 1) {
+        err();
+        return NULL;
+    }
+
+    char *cmd = segment;
+    char *filename = NULL;
+
+    if (redir_count == 1) {
+        filename = strchr(segment, '>');
+        *filename = '\0';
+        filename++;
+
+        // Trim both sides
+        cmd = trim_whitespace(cmd);
+        filename = trim_whitespace(filename);
+
+        char **tokens = split_tokens(filename, " \t");
+        if (!tokens || !tokens[0] || tokens[1]) {
+            free_argv(tokens);
+            err();
+            return NULL;
+        }
+
+        *redir_path = strdup(tokens[0]);
+        free_argv(tokens);
+    } else {
+        cmd = trim_whitespace(cmd);
+    }
+
+    char **argv = split_tokens(cmd, " \t");
+    if (!argv || !argv[0]) {
+        free_argv(argv);
+        if (*redir_path) {
+            free(*redir_path);
+            *redir_path = NULL; 
+        }
+        err();
+        return NULL;
+    }
+
+    return argv;
 }
 
 /* ===========================================================
