@@ -9,13 +9,11 @@
 // The *only* allowed error message per spec
 static const char ERRMSG[] = "An error has occurred\n";
 
-/* ===========================================================
-   ==========   BASIC ERROR HANDLER + GLOBAL PATH   ===========
-   =========================================================== */
-
+/* -------- utilities -------- */
 // Prints the official error message to STDERR
 static void err(void) {
     write(STDERR_FILENO, ERRMSG, sizeof(ERRMSG) - 1);
+    
 }
 
 // Global variable storing the search PATH as a NULL-terminated array
@@ -182,19 +180,27 @@ static char **parse_cmd_with_redir(char *segment, char **redir_path) {
  * Returns 1 if handled, 0 otherwise.
  */
 static int handle_builtin(char **argv) {
-    if (!argv || !argv[0]) return 0;
+    if (!argv || !argv[0]) 
+        return 0;
 
     // ======= exit =======
     if (strcmp(argv[0], "exit") == 0) {
-        if (argv[1] != NULL) { err(); return 1; } // exit takes no args
+        if (argv[1] != NULL) {
+            err(); 
+            return 1; // exit takes no args
+        }
         path_free();
-        exit(0);
+        exit(0); // ends the shell
     }
 
     // ======= cd =======
     if (strcmp(argv[0], "cd") == 0) {
-        if (!argv[1] || argv[2]) { err(); return 1; } // exactly one arg
-        if (chdir(argv[1]) != 0) err();
+        if (!argv[1] || argv[2]) { // exactly one arg
+            err(); 
+            return 1; 
+        }
+        if (chdir(argv[1]) != 0) 
+            err();
         return 1;
     }
 
@@ -203,21 +209,31 @@ static int handle_builtin(char **argv) {
         // clear old path
         path_free();
 
-        // count new dirs
+        // count new dirs (can be zero → disables externals)
         size_t count = 0;
-        while (argv[1+count]) count++;
+        while (argv[1 + count]) 
+            count++;
 
-        // rebuild global path
         g_path = malloc((count + 1) * sizeof(char*));
-        if (!g_path) { err(); exit(1); }
-        for (size_t i=0; i<count; i++)
-            g_path[i] = strdup(argv[1+i]);
+        if (!g_path) { 
+            err(); 
+            exit(1); 
+        }
+
+        for (size_t i = 0; i < count; i++) {
+            g_path[i] = strdup(argv[1 + i]);
+            if (!g_path[i]) { 
+                err(); 
+                exit(1); 
+            }
+        }
         g_path[count] = NULL;
         return 1;
     }
 
-    return 0; // not a built-in command
+    return 0; // not a built-in
 }
+
 
 // ========== external command handler ==========
 
@@ -261,16 +277,6 @@ static pid_t run_external(char **argv, const char *redir_path) {
             return -1;
         }
     }
-    
-
-    /*
-    // try to find the absolute path from what the user entered, if it doesn't work then print error
-    char *prog = resolve_exec(argv[0]);
-    if (!prog) {
-        err();
-        return -1;
-    }
-    */
 
     // assuming that the program exists, fork a child process
     pid_t pid = fork();
@@ -341,7 +347,7 @@ int main(int argc, char *argv[]) {
         // if the file cannot be opened, print error and exit
         if (!in) { 
             err(); 
-            exit(1); 
+            exit(1);
         }
         interactive = 0;
     } 
@@ -413,72 +419,6 @@ int main(int argc, char *argv[]) {
                 free(redir);
                 continue;
             }
-
-            /*
-            // non-built-in: run external command
-            char *prog = resolve_exec(cmd[0]);
-
-            // if the exe doesn't exist in any of the paths, print error and skip this segment
-            if (!prog) {
-                err();
-                free_argv(cmd);
-                free(redir);
-                continue;
-            }
-            */
-
-            /* ~~~~~ This block is redundant ~~~~~~
-
-            // fork a child process for this command
-            pid_t pid = fork();
-
-            // if we fail to fork, print error and skip this segment
-            if (pid < 0) {
-                err();
-            }
-
-            // if we are in the child process, do redirection and execv
-            else if (pid == 0) {
-                // this whole thing is almost exactly like what we did in run_external()
-                if (redir) {
-                    // create the file (if it doesn't exist), open it for writing, and truncate if it already exists
-                    int fd = open(redir, O_CREAT|O_WRONLY|O_TRUNC, 0666);
-
-                    // if the file cannot be opened, print error and exit
-                    if (fd < 0) { 
-                        err(); 
-                        _exit(1); 
-                    }
-
-                    // redirect stdout and stderr to file
-                    if (dup2(fd, STDOUT_FILENO) < 0 || dup2(fd, STDERR_FILENO) < 0) { 
-                        err(); 
-                        _exit(1); 
-                    }
-
-                    // close the original file descriptor
-                    close(fd);
-                }
-
-                // replace the child process with the new program
-                execv(prog, cmd);
-
-                // if execv fails, print error and exit child
-                err();
-                _exit(1);
-            } else {
-                // save child PID in array to wait for it later
-                if (started < sizeof(kids)/sizeof(kids[0])) {
-                    kids[started++] = pid;
-                }
-            }
-
-            // free memory allocated for this command segment
-            free(prog);
-            free_argv(cmd);
-            // free redirection path if any
-            free(redir);
-            */
 
             // run the external command (handles forking internally)
             pid_t pid = run_external(cmd, redir);
