@@ -100,22 +100,58 @@ static void free_argv(char **argv) {
 /*
  * resolve_exec():
  * Given a command name (like "ls"), check each directory in g_path.
- * Build a full path like "/bin/ls" and test if it exists & is executable
- * via access(path, X_OK).
+ * Build a full path like "/bin/ls" and test with access(..., X_OK).
  * Returns malloc'd string with the full path, or NULL if not found.
  */
 static char *resolve_exec(const char *cmd) {
-    if (!g_path || !g_path[0]) return NULL;
-    for (size_t i=0; g_path[i]; i++) {
-        size_t need = strlen(g_path[i]) + 1 + strlen(cmd) + 1;
+    if (!cmd || !*cmd) 
+        return NULL;
+
+    // If the command contains a '/', treat it as an explicit path.
+    // (Spec-wise, we still block running anything if PATH is empty
+    // earlier in run_external(); this just resolves the path correctly.)
+    if (strchr(cmd, '/')) {
+        if (access(cmd, X_OK) == 0) {
+            char *dup = strdup(cmd);
+            if (!dup) { 
+                err(); 
+                exit(1); }
+            return dup;
+        }
+        return NULL;
+    }
+
+    // Otherwise, search through g_path entries
+    if (!g_path) return NULL;
+
+    size_t len_cmd = strlen(cmd);
+    for (size_t i = 0; g_path[i]; i++) {
+        if (!g_path[i] || !*g_path[i]) 
+            continue; // skip empty entries
+
+        size_t len_dir = strlen(g_path[i]);
+
+        // Need: dir + optional '/' + cmd + '\0'
+        size_t need = len_dir + (g_path[i][len_dir ? len_dir - 1 : 0] == '/' ? 0 : 1)
+                      + len_cmd + 1;
+
         char *p = malloc(need);
         if (!p) { err(); exit(1); }
+
+        if (len_dir && g_path[i][len_dir - 1] == '/')
+            snprintf(p, need, "%s%s", g_path[i], cmd);
+        else
         snprintf(p, need, "%s/%s", g_path[i], cmd);
-        if (access(p, X_OK) == 0) return p;  // found a valid executable
+
+        if (access(p, X_OK) == 0) {
+            return p; // caller frees
+        }
         free(p);
     }
+
     return NULL;
 }
+
 
 /* ===========================================================
    ==========   PARSE COMMAND + HANDLE REDIRECTION   ==========
