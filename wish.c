@@ -20,18 +20,43 @@ static void err(void) {
 // Example: ["/bin", "/usr/bin", NULL]
 static char **g_path = NULL;
 
-/* Initialize default path to contain just "/bin" */
+// Initialize default path to contain just "/bin"
 static void path_init(void) {
-    g_path = malloc(2 * sizeof(char*));
-    if (!g_path) { err(); exit(1); }
+    // Clean up old path
+    if (g_path){
+        path_free();
+    }
+
+    // Allocating slots
+    g_path = calloc(2, sizeof *g_path);
+    if (!g_path) {
+        err();
+        exit(1);
+    }
+
+    // Storing copy of /bin
     g_path[0] = strdup("/bin");
-    g_path[1] = NULL;
+    if (!g_path[0]) {
+        free(g_path);
+        g_path = NULL;
+        err();
+        exit(1);
+    }
+
 }
 
-/* Frees all memory associated with the path array */
+// Frees all memory associated with the path array
 static void path_free(void) {
-    if (!g_path) return;
-    for (size_t i = 0; g_path[i]; i++) free(g_path[i]);
+    if (!g_path){
+        return;
+    }
+
+    // Free directory string
+    for (size_t i = 0; g_path[i]; i++){
+        free(g_path[i]);
+    }
+
+    // Free the pointer
     free(g_path);
     g_path = NULL;
 }
@@ -87,9 +112,15 @@ static char **split_tokens(char *s, const char *delims) {
 }
 
 /* Frees token arrays created by split_tokens() */
+/* Frees token arrays created by split_tokens() */
 static void free_argv(char **argv) {
-    if (!argv) return;
-    for (size_t i=0; argv[i]; i++) free(argv[i]);
+    if (!argv){
+    return;
+    }
+
+    for (size_t i=0; argv[i]; i++) {
+        free(argv[i]);
+    }
     free(argv);
 }
 
@@ -167,41 +198,85 @@ static char *resolve_exec(const char *cmd) {
  * - Exactly ONE filename allowed after '>'.
  * - Returns NULL if syntax is invalid.
  */
+// Trims leading and trailing whitespace from a string
+static char *trim_whitespace(char *string){
+    char* original_pointer = string;
+    char* backend_pointer;
+
+    // Skip leading whitespace
+    while (*original_pointer == ' ' || *original_pointer == '\t'){
+        original_pointer++;
+    }
+
+    // Remove trailing whitespace
+    backend_pointer = original_pointer + strlen(original_pointer);
+
+    while (backend_pointer > original_pointer && (backend_pointer[-1] == ' ' || backend_pointer[-1] == '\t' || backend_pointer[-1] == '\n')){
+        backend_pointer--;
+    }
+
+    *backend_pointer = '\0';
+    return original_pointer;
+}
+
 static char **parse_cmd_with_redir(char *segment, char **redir_path) {
     *redir_path = NULL;
 
-    // count number of '>' symbols
-    int gt_count = 0;
-    for (char *c = segment; *c; c++) if (*c == '>') gt_count++;
-    if (gt_count > 1) { err(); return NULL; }
-
-    char *left = segment;
-    char *right = NULL;
-
-    if (gt_count == 1) {
-        // split at the first '>'
-        right = strchr(segment, '>');
-        *right = '\0';
-        right++;
-
-        // tokens after '>' should give exactly one filename
-        char **r = split_tokens(right, " \t");
-        if (!r || !r[0] || r[1]) {
-            err();
-            free_argv(r);
-            return NULL;
-        }
-        *redir_path = strdup(r[0]);
-        free_argv(r);
-    }
-
-    // split command part into argv[]
-    char **argv = split_tokens(left, " \t");
-    if (!argv || !argv[0]) {
-        free_argv(argv);
-        if (*redir_path) { free(*redir_path); *redir_path=NULL; }
+    if (!segment) {
+        err();
         return NULL;
     }
+
+    // Counts > (Requires there only to be 0 or 1 '>')
+    int redir_count = 0;
+    for (char *count = segment; *count; c++) {
+        if (*count == '>'){
+            redir_count++;
+        }
+    }
+
+    // If more than one '>', then NULL
+    if (redir_count > 1) {
+        err();
+        return NULL;
+    }
+
+    char *cmd = segment;
+    char *filename = NULL;
+
+    if (redir_count == 1) {
+        filename = strchr(segment, '>');
+        *filename = '\0';
+        filename++;
+
+        // Trim both sides
+        cmd = trim_whitespace(cmd);
+        filename = trim_whitespace(filename);
+
+        char **tokens = split_tokens(filename, " \t");
+        if (!tokens || !tokens[0] || tokens[1]) {
+            free_argv(tokens);
+            err();
+            return NULL;
+        }
+
+        *redir_path = strdup(tokens[0]);
+        free_argv(tokens);
+    } else {
+        cmd = trim_whitespace(cmd);
+    }
+
+    char **argv = split_tokens(cmd, " \t");
+    if (!argv || !argv[0]) {
+        free_argv(argv);
+        if (*redir_path) {
+            free(*redir_path);
+            *redir_path = NULL; 
+        }
+        err();
+        return NULL;
+    }
+
     return argv;
 }
 
