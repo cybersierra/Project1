@@ -23,18 +23,45 @@ static void err(void) {
 // Example: ["/bin", "/usr/bin", NULL]
 static char **g_path = NULL;
 
-/* Initialize default path to contain just "/bin" */
+// Addy
+// Initialize default path to contain just "/bin"
 static void path_init(void) {
-    g_path = malloc(2 * sizeof(char*));
-    if (!g_path) { err(); exit(1); }
+    // Clean up old path
+    if (g_path){
+        path_free();
+    }
+
+    // Allocating slots
+    g_path = calloc(2, sizeof *g_path);
+    if (!g_path) {
+        err();
+        exit(1);
+    }
+
+    // Storing copy of /bin
     g_path[0] = strdup("/bin");
-    g_path[1] = NULL;
+    if (!g_path[0]) {
+        free(g_path);
+        g_path = NULL;
+        err();
+        exit(1);
+    }
+
 }
 
-/* Frees all memory associated with the path array */
+// Addy
+// Frees all memory associated with the path array
 static void path_free(void) {
-    if (!g_path) return;
-    for (size_t i = 0; g_path[i]; i++) free(g_path[i]);
+    if (!g_path){
+        return;
+    }
+
+    // Free directory string
+    for (size_t i = 0; g_path[i]; i++){
+        free(g_path[i]);
+    }
+
+    // Free the pointer
     free(g_path);
     g_path = NULL;
 }
