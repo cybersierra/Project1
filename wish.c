@@ -1,42 +1,446 @@
-#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <fcntl.h>
-#include <errno.h>
+#include <unistd.h>   // fork(), execv(), access(), chdir(), write()
+#include <sys/wait.h> // waitpid()
+#include <fcntl.h>    // open(), O_CREAT, O_WRONLY, O_TRUNC
+#include <errno.h>    // errno
 
-// Error message
-static void printError(void) {
-    fputs("An error has occurred\n", stderr);
-    fflush(stderr);
+// The *only* allowed error message per spec
+static const char ERRMSG[] = "An error has occurred\n";
 
-/* -------- utilities -------- */
+/* ===========================================================
+   ==========   BASIC ERROR HANDLER + GLOBAL PATH   ===========
+   =========================================================== */
+
+// Prints the official error message to STDERR
 static void err(void) {
     write(STDERR_FILENO, ERRMSG, sizeof(ERRMSG) - 1);
-    
 }
 
-// Main function
-int main(int arc, char *argv[]) {
-    FILE *in = NULL;
+// Global PATH as a NULL-terminated array (e.g., ["/bin", "/usr/bin", NULL])
+static char **g_path = NULL;
 
-    // Interactive
+/* Initialize default path to contain just "/bin" */
+static void path_init(void) {
+    g_path = malloc(2 * sizeof(char*));
+    if (!g_path) { err(); exit(1); }
+    g_path[0] = strdup("/bin");
+    if (!g_path[0]) { err(); exit(1); }
+    g_path[1] = NULL;
+}
+
+/* Frees all memory associated with the path array */
+static void path_free(void) {
+    if (!g_path) return;
+    for (size_t i = 0; g_path[i]; i++) free(g_path[i]);
+    free(g_path);
+    g_path = NULL;
+}
+
+/* ===========================================================
+   ==========        STRING PARSING HELPERS          =========
+   =========================================================== */
+
+/*
+ * split_tokens():
+ * Splits a string `s` into tokens separated by any of the given `delims`
+ * (like " " or "&" or "\t"). Uses strsep() to handle multiple
+ * consecutive delimiters gracefully.
+ * Returns a NULL-terminated array of strdup’d strings.
+ * Caller must free with free_argv().
+ */
+static char **split_tokens(char *s, const char *delims) {
+    size_t cap = 8, n = 0;
+    char **out = malloc(cap * sizeof(char*));
+    if (!out) return NULL;
+    char *tok;
+
+    while ((tok = strsep(&s, delims)) != NULL) {
+        // skip empty pieces
+        if (*tok == '\0') continue;
+
+        // trim whitespace on both ends
+        while (*tok == ' ' || *tok == '\t') tok++;
+        char *end = tok + strlen(tok);
+        while (end > tok && (end[-1] == ' ' || end[-1] == '\t')) end--;
+        *end = '\0';
+
+        if (*tok == '\0') continue;
+
+        // expand storage if needed
+        if (n + 1 >= cap) {
+            cap *= 2;
+            char **tmp = realloc(out, cap * sizeof(char*));
+            if (!tmp) { free(out); return NULL; }
+            out = tmp;
+        }
+
+        out[n] = strdup(tok);
+        if (!out[n]) { free(out); return NULL; }
+        n++;
+    }
+
+    // terminate array with NULL
+    if (n + 1 >= cap) {
+        cap += 1;
+        char **tmp = realloc(out, cap * sizeof(char*));
+        if (!tmp) { free(out); return NULL; }
+        out = tmp;
+    }
+    out[n] = NULL;
+    return out;
+}
+
+/* Frees token arrays created by split_tokens() */
+static void free_argv(char **argv) {
+    if (!argv) return;
+    for (size_t i=0; argv[i]; i++) free(argv[i]);
+    free(argv);
+}
+
+/* ===========================================================
+   ==========        PATH SEARCH FOR EXECUTABLES     =========
+   =========================================================== */
+
+/*
+ * resolve_exec():
+ * Given a command name (like "ls"), check each directory in g_path.
+ * Build a full path like "/bin/ls" and test with access(..., X_OK).
+ * Returns malloc'd string with the full path, or NULL if not found.
+ */
+static char *resolve_exec(const char *cmd) {
+    if (!cmd || !*cmd) 
+        return NULL;
+
+    // If the command contains a '/', treat it as an explicit path.
+    // (Spec-wise, we still block running anything if PATH is empty
+    // earlier in run_external(); this just resolves the path correctly.)
+    if (strchr(cmd, '/')) {
+        if (access(cmd, X_OK) == 0) {
+            char *dup = strdup(cmd);
+            if (!dup) { 
+                err(); 
+                exit(1); }
+            return dup;
+        }
+        return NULL;
+    }
+
+    // Otherwise, search through g_path entries
+    if (!g_path) return NULL;
+
+    size_t len_cmd = strlen(cmd);
+    for (size_t i = 0; g_path[i]; i++) {
+        if (!g_path[i] || !*g_path[i]) 
+            continue; // skip empty entries
+
+        size_t len_dir = strlen(g_path[i]);
+
+        // Need: dir + optional '/' + cmd + '\0'
+        size_t need = len_dir + (g_path[i][len_dir ? len_dir - 1 : 0] == '/' ? 0 : 1)
+                      + len_cmd + 1;
+
+        char *p = malloc(need);
+        if (!p) { err(); exit(1); }
+
+        if (len_dir && g_path[i][len_dir - 1] == '/')
+            snprintf(p, need, "%s%s", g_path[i], cmd);
+        else
+            snprintf(p, need, "%s/%s", g_path[i], cmd);
+
+        if (access(p, X_OK) == 0) {
+            return p; // caller frees
+        }
+        free(p);
+    }
+
+    return NULL;
+}
+
+
+/* ===========================================================
+   ==========   PARSE COMMAND + HANDLE REDIRECTION   ==========
+   =========================================================== */
+
+/*
+ * parse_cmd_with_redir():
+ * Takes a command line segment (like "ls -l > out.txt").
+ * Splits out the filename following '>' (if any) and returns argv[].
+ *
+ * - Only ONE '>' allowed.
+ * - Exactly ONE filename allowed after '>'.
+ * - Returns NULL if syntax is invalid.
+ */
+static char **parse_cmd_with_redir(char *segment, char **redir_path) {
+    *redir_path = NULL;
+
+    // count number of '>' symbols
+    int gt_count = 0;
+    for (char *c = segment; *c; c++) if (*c == '>') gt_count++;
+    if (gt_count > 1) { err(); return NULL; }
+
+    char *left = segment;
+    char *right = NULL;
+
+    if (gt_count == 1) {
+        // split at the first '>'
+        right = strchr(segment, '>');
+        *right = '\0';
+        right++;
+
+        // tokens after '>' should give exactly one filename
+        char **r = split_tokens(right, " \t");
+        if (!r || !r[0] || r[1]) {
+            err();
+            free_argv(r);
+            return NULL;
+        }
+        *redir_path = strdup(r[0]);
+        free_argv(r);
+        if (!*redir_path) { err(); return NULL; }
+    }
+
+    // split command part into argv[]
+    char **argv = split_tokens(left, " \t");
+    if (!argv || !argv[0]) {
+        free_argv(argv);
+        if (*redir_path) { free(*redir_path); *redir_path=NULL; }
+        return NULL;
+    }
+    return argv;
+}
+
+/* ===========================================================
+   ==========        BUILT-IN COMMAND HANDLER         =========
+   =========================================================== */
+
+static int is_builtin(const char *cmd) {
+    return cmd &&
+        (strcmp(cmd, "exit") == 0 ||
+         strcmp(cmd, "cd")   == 0 ||
+         strcmp(cmd, "path") == 0);
+}
+
+/*
+ * handle_builtin():
+ * Handles (exit, cd, path) directly in the parent.
+ * Returns 1 if handled, 0 otherwise.
+ */
+static int handle_builtin(char **argv) {
+    if (!argv || !argv[0]) 
+        return 0;
+
+    // ======= exit =======
+    if (strcmp(argv[0], "exit") == 0) {
+        if (argv[1] != NULL) {
+            err(); 
+            return 1; // exit takes no args
+        }
+        path_free();
+        exit(0); // ends the shell
+    }
+
+    // ======= cd =======
+    if (strcmp(argv[0], "cd") == 0) {
+        if (!argv[1] || argv[2]) { // exactly one arg
+            err(); 
+            return 1; 
+        }
+        if (chdir(argv[1]) != 0) 
+            err();
+        return 1;
+    }
+
+    // ======= path =======
+    if (strcmp(argv[0], "path") == 0) {
+        // clear old path
+        path_free();
+
+        // count new dirs (can be zero → disables externals)
+        size_t count = 0;
+        while (argv[1 + count]) 
+            count++;
+
+        g_path = malloc((count + 1) * sizeof(char*));
+        if (!g_path) { 
+            err(); 
+            exit(1); 
+        }
+
+        for (size_t i = 0; i < count; i++) {
+            g_path[i] = strdup(argv[1 + i]);
+            if (!g_path[i]) { 
+                err(); 
+                exit(1); 
+            }
+        }
+        g_path[count] = NULL;
+        return 1;
+    }
+
+    return 0; // not a built-in
+}
+
+/* ===========================================================
+   ==========         EXTERNAL COMMAND RUNNER         =========
+   =========================================================== */
+
+/*
+ * run_external():
+ * Launches an external program (like /bin/ls).
+ * Handles redirection if redir_path != NULL.
+ * Returns child's pid on success, -1 on error (after printing err()).
+ */
+static pid_t run_external(char **argv, const char *redir_path) {
+    if (!g_path || !g_path[0]) { 
+        err(); 
+        return -1; 
+    }
+
+    char *prog = resolve_exec(argv[0]);
+    if (!prog) { 
+        err(); 
+        return -1; 
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) { 
+        err(); 
+        free(prog); 
+        return -1; 
+    }
+
+    if (pid == 0) {
+        // child
+        if (redir_path) {
+            int fd = open(redir_path, O_CREAT|O_WRONLY|O_TRUNC, 0666);
+            if (fd < 0) { 
+                err(); 
+                _exit(1); 
+            }
+            if (dup2(fd, STDOUT_FILENO) < 0 || dup2(fd, STDERR_FILENO) < 0) {
+                err();
+                _exit(1);
+            }
+            close(fd);
+        }
+
+        execv(prog, argv);
+        // exec failed
+        err();
+        _exit(1);
+    }
+
+    // parent
+    free(prog);
+    return pid;
+}
+
+/* ===========================================================
+   ==========                 MAIN                   =========
+   =========================================================== */
+
+int main(int argc, char *argv[]) {
+    FILE *in = NULL;
+    int interactive = 1;
+
+    // input source
     if (argc == 1) {
         in = stdin;
-
-    // Batch
+        interactive = 1;
     } else if (argc == 2) {
         in = fopen(argv[1], "r");
-        if (in == NULL) {
-            printError();
-            exit(1);
+        if (!in) { 
+            err(); 
+            exit(1); 
         }
+        interactive = 0;
     } else {
-        printError();
+        err();
         exit(1);
     }
 
+    // initialize PATH list to ["/bin", NULL]
+    path_init();
+
+    // buffer for getline()
+    char *line = NULL;
+    size_t cap = 0;
+
+    while (1) {
+        if (interactive) {
+            printf("wish> ");
+            fflush(stdout);
+        }
+
+        ssize_t n = getline(&line, &cap, in);
+        if (n == -1) break;
+
+        // strip trailing newlines
+        while (n > 0 && (line[n-1] == '\n' || line[n-1] == '\r')) line[--n] = '\0';
+
+        // split by '&' for parallel commands
+        char **segments = split_tokens(line, "&");
+        if (!segments) {
+            err();
+            continue;
+        }
+
+        // track children to wait on
+        pid_t kids[256];
+        size_t started = 0;
+
+        for (size_t i=0; segments[i]; i++) {
+            char *redir = NULL;
+            char **cmd = parse_cmd_with_redir(segments[i], &redir);
+            if (!cmd) { 
+                free(redir); 
+                continue; 
+            }
+
+            if (!cmd[0]) { 
+                free_argv(cmd); 
+                free(redir); 
+                continue; 
+            }
+
+            // built-ins execute in parent; redirection on built-ins is invalid
+            if (is_builtin(cmd[0])) {
+                if (redir) {
+                    err();            // spec: no redirection for built-ins
+                    free_argv(cmd);
+                    free(redir);
+                    continue;
+                }
+                (void)handle_builtin(cmd); // may exit(0)
+                free_argv(cmd);
+                free(redir);
+                continue;
+            }
+
+            // external command
+            pid_t pid = run_external(cmd, redir);
+            if (pid > 0 && started < (sizeof(kids)/sizeof(kids[0]))) {
+                kids[started++] = pid;
+            }
+            // errors already reported by run_external
+
+            free_argv(cmd);
+            free(redir);
+        }
+
+        // wait for all child processes to finish
+        for (size_t i=0; i<started; i++) {
+            // waitpid can be interrupted by signals
+            while (waitpid(kids[i], NULL, 0) < 0 && errno == EINTR) {}
+        }
+
+        free_argv(segments);
+    }
+
+    // cleanup on EOF
+    free(line);
+    path_free();
+    return 0;
 }
