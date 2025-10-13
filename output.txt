@@ -1,0 +1,36 @@
+=== Test 1: Basic ===
+/home/sierra/wish
+=== Test 2: cd ===
+/home/sierra/wish
+/
+/
+=== Test 3: PATH manipulation ===
+bin
+bin.usr-is-merged
+boot
+dev
+etc
+home
+init
+lib
+lib.usr-is-merged
+lib64
+lost+found
+media
+mnt
+opt
+proc
+root
+run
+sbin
+sbin.usr-is-merged
+snap
+srv
+sys
+tmp
+usr
+var
+=== Test 4: Redirection ===
+=== Test 5: Parallelism ===
+done
+=== Test 6: Expected errors ===

@@ -227,25 +227,58 @@ static int handle_builtin(char **argv) {
 // Uses fork() + execv() + wait().
 // Parent continues after child creation.
 
-static void run_external(char **argv, const char *redir_path) {
-    // if the user enters path() with no arguments, print error
-    if (!g_path || !g_path[0]) { 
-        err(); return; 
+static pid_t run_external(char **argv, const char *redir_path) {
+    // sanity check
+    if(!argv || !argv[0]) {
+        err();
+        return -1;
     }
+    
+    char *prog = NULL;
 
+    // if the user provides a path (contains '/'), use it directly; otherwise search PATH
+    if (strchr(argv[0], '/')) {
+        if(access(argv[0], X_OK) != 0) {
+            err();
+            return -1;
+        }
+        prog = strdup(argv[0]);
+        if (!prog){
+            err();
+            return -1;
+        }
+    }
+    else{
+        // search PATH and fail if not found
+        if (!g_path || !g_path[0]){
+            err();
+            return -1;
+        }
+
+        prog = resolve_exec(argv[0]);
+        if (!prog){
+            err();
+            return -1;
+        }
+    }
+    
+
+    /*
     // try to find the absolute path from what the user entered, if it doesn't work then print error
     char *prog = resolve_exec(argv[0]);
-    if (!prog) { 
-        err(); return; 
+    if (!prog) {
+        err();
+        return -1;
     }
+    */
 
     // assuming that the program exists, fork a child process
     pid_t pid = fork();
     // if the fork fails, print error and free the memory allocated for the program
-    if (pid < 0) { 
-        err(); 
-        free(prog); 
-        return; 
+    if (pid < 0) {
+        err();
+        free(prog);
+        return -1;
     }
 
     // now we are in the child process
@@ -280,6 +313,9 @@ static void run_external(char **argv, const char *redir_path) {
     } else {
         // parent process: just free the program path
         free(prog);
+
+        // return the child's PID to the caller
+        return pid; 
     }
 }
 
@@ -378,6 +414,7 @@ int main(int argc, char *argv[]) {
                 continue;
             }
 
+            /*
             // non-built-in: run external command
             char *prog = resolve_exec(cmd[0]);
 
@@ -388,6 +425,9 @@ int main(int argc, char *argv[]) {
                 free(redir);
                 continue;
             }
+            */
+
+            /* ~~~~~ This block is redundant ~~~~~~
 
             // fork a child process for this command
             pid_t pid = fork();
@@ -437,6 +477,18 @@ int main(int argc, char *argv[]) {
             free(prog);
             free_argv(cmd);
             // free redirection path if any
+            free(redir);
+            */
+
+            // run the external command (handles forking internally)
+            pid_t pid = run_external(cmd, redir);
+
+            if (pid > 0 && started < sizeof(kids)/sizeof(kids[0])) {
+                // save child PID in array to wait for it later
+                kids[started++] = pid;
+            }
+
+            free_argv(cmd);
             free(redir);
         }
 

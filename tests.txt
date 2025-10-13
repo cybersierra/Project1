@@ -1,0 +1,32 @@
+path /bin /usr/bin
+
+echo === Test 1: Basic ===
+pwd
+
+echo === Test 2: cd ===
+pwd
+cd /
+pwd
+cd ..
+pwd
+
+echo === Test 3: PATH manipulation ===
+path
+ls
+path /bin /usr/bin
+ls
+
+echo === Test 4: Redirection ===
+echo hello world > hello.txt
+cat hello.txt
+
+echo === Test 5: Parallelism ===
+sleep 1 & sleep 1 & sleep 1 & echo done
+
+echo === Test 6: Expected errors ===
+nosuchcommand
+echo hi >
+cd
+cd too many args
+
+exit
