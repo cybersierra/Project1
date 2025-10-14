@@ -66,6 +66,7 @@ static void path_free(void) {
 
 /* ===========================================================
    ==========        STRING PARSING HELPERS          =========
+   ==========        Edited by: Kyle Davis           =========
    =========================================================== */
 
 /*
@@ -76,13 +77,27 @@ static void path_free(void) {
  * Returns a NULL-terminated array of strdup’d strings.
  * Caller must free with free_argv().
  */
+
 static char **split_tokens(char *s, const char *delims) {
+    if (!s) {
+        return NULL;
+    } 
+
+    char *buf = strdup(s); // makes a modifiable copy
+    if (!buf) {
+        return NULL;
+    }
+    char *cursor = buf;
+    
     size_t cap = 8, n = 0;
     char **out = malloc(cap * sizeof(char*));
-    if (!out) return NULL;
+    if (!out) {
+        free(buf);
+        return NULL;
+    }
     char *tok;
 
-    while ((tok = strsep(&s, delims)) != NULL) {
+    while ((tok = strsep(&cursor, delims)) != NULL) {
         // skip empty pieces
         if (*tok == '\0') continue;
 
@@ -97,20 +112,36 @@ static char **split_tokens(char *s, const char *delims) {
         // expand storage if needed
         if (n + 1 >= cap) {
             cap *= 2;
-            out = realloc(out, cap * sizeof(char*));
-            if (!out) return NULL;
+            char **tmp = realloc(out, cap * sizeof(char*));
+            if (!tmp) {
+                free(buf);
+                return NULL;
+            }
+            out = tmp;
         }
 
-        out[n++] = strdup(tok);
+        // Ensures strdup succeeds.
+        char *dup = strdup(tok);
+        if (!dup) {
+            free(buf);
+            return NULL;
+        }
+        
+        out[n++] = dup;
     }
 
     // terminate array with NULL
     if (n + 1 >= cap) {
         cap += 1;
-        out = realloc(out, cap * sizeof(char*));
-        if (!out) return NULL;
+        char **tmp = realloc(out, cap * sizeof(char*));
+        if (!tmp) {
+            free(buf);
+            return NULL;
+        }
+        out = tmp;
     }
     out[n] = NULL;
+    free(buf);
     return out;
 }
 
