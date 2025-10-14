@@ -20,6 +20,9 @@ static void err(void) {
 // Example: ["/bin", "/usr/bin", NULL]
 static char **g_path = NULL;
 
+static void path_free(void);
+
+
 // Initialize default path to contain just "/bin"
 static void path_init(void) {
     // Clean up old path
@@ -229,7 +232,7 @@ static char **parse_cmd_with_redir(char *segment, char **redir_path) {
 
     // Counts > (Requires there only to be 0 or 1 '>')
     int redir_count = 0;
-    for (char *count = segment; *count; c++) {
+    for (char *count = segment; *count; count++) {
         if (*count == '>'){
             redir_count++;
         }
