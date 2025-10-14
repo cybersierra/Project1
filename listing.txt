@@ -1,6 +1,9 @@
+Faux Project
 Libraries and Utilities
 Makefile
+Parse Comment, What I think
 README.md
+batch.txt
 listing.txt
 out.txt
 output.txt

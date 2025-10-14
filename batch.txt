@@ -1,0 +1,5 @@
+path /bin /usr/bin
+echo running in batch
+sleep 1 & echo parallel works
+ls > listing.txt
+exit
